@@ -1,0 +1,86 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>WebRTC Simple Demo</title>
+    <style>video{width:45%;}</style>
+</head>
+<body>
+<h1>WebRTC Simple Demo</h1>
+<div>
+    <video id="local" autoplay playsinline muted></video>
+    <video id="remote" autoplay playsinline></video>
+</div>
+<div>
+    <button id="list">Get Peers</button>
+    <select id="peers"></select>
+    <button id="call">Call</button>
+</div>
+
+
+<script>
+    const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host);
+    let myId;
+    let pc;
+    const localVideo = document.getElementById('local');
+    const remoteVideo = document.getElementById('remote');
+
+
+    ws.addEventListener('message', async (ev) => {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === 'id') { myId = msg.id; console.log('my id', myId); }
+        if (msg.type === 'list') fillPeers(msg.clients);
+        if (msg.type === 'offer') await handleOffer(msg.from, msg.data);
+        if (msg.type === 'answer') await pc.setRemoteDescription(msg.data);
+        if (msg.type === 'ice') await pc.addIceCandidate(msg.data).catch(()=>{});
+        if (msg.type === 'peer-left') removePeer(msg.id);
+    });
+
+    async function signalIntentToConnect(remoteId) {
+        ws.send(JSON.stringify({type: "connect", to: remoteId}));
+    }
+
+    async function createPeerConnection(remoteId) {
+        pc = new RTCPeerConnection();
+
+        pc.ondatachannel = (ch) => {
+            console.warn("Data channel received");
+            ch.channel.send("IT WORKS!");
+            ch.channel.onmessage = (e) => { console.log("Received message:", e.data); };
+        }
+        pc.ontrack = (e) => { remoteVideo.srcObject = e.streams[0]; };
+        pc.onicecandidate = (e) => { if (e.candidate) ws.send(JSON.stringify({type:'ice', to: remoteId, data: e.candidate})); };
+        // const localStream = localVideo.srcObject || await startLocal();
+        // for (const t of localStream.getTracks()) pc.addTrack(t, localStream);
+        return pc;
+    }
+
+
+    document.getElementById('list').onclick = () => ws.send(JSON.stringify({type:'list'}));
+    function fillPeers(list) {
+        const sel = document.getElementById('peers'); sel.innerHTML='';
+        list.forEach(id => { const o = document.createElement('option'); o.value=id; o.textContent=id; sel.appendChild(o); });
+    }
+    function removePeer(id){ const sel=document.getElementById('peers'); for(let i=0;i<sel.options.length;i++) if(sel.options[i].value===id) sel.remove(i); }
+
+
+    document.getElementById('call').onclick = async () => {
+        const to = document.getElementById('peers').value; if(!to) return alert('choose peer');
+        await signalIntentToConnect(to);
+    };
+
+
+    async function handleOffer(from, offer) {
+        try {
+            await createPeerConnection(from);
+            await pc.setRemoteDescription(offer);
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            ws.send(JSON.stringify({type:'answer', to: from, data: answer}));
+        } catch (err) {
+            console.error('Error handling offer:', err);
+        }
+    }
+</script>
+</body>
+</html>
